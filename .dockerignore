@@ -1,0 +1,9 @@
+.git/
+.gitignore
+.dockerignore
+docker-compose.yml
+haproxy.cfg
+README.md
+LICENSE
+info.json
+ext/target/

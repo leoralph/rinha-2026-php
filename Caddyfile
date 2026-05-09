@@ -1,0 +1,17 @@
+{
+	frankenphp {
+		worker /app/public/index.php
+	}
+	order php_server before file_server
+	auto_https off
+	admin off
+	persist_config off
+	log {
+		output discard
+	}
+}
+
+{$SERVER_NAME} {
+	root * /app/public
+	php_server
+}
