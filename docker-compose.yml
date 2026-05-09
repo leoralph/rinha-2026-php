@@ -1,0 +1,42 @@
+x-api: &api
+  image: rinha-2026-php:latest
+  networks: [rinha]
+  ulimits:
+    nofile: { soft: 65535, hard: 65535 }
+  security_opt:
+    - seccomp:unconfined
+  deploy:
+    resources:
+      limits:
+        cpus: "0.45"
+        memory: "160MB"
+
+services:
+  api1:
+    <<: *api
+    build: .
+
+  api2:
+    <<: *api
+
+  haproxy:
+    image: haproxy:3.0-alpine
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "9999:9999"
+    networks: [rinha]
+    depends_on: [api1, api2]
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+    security_opt:
+      - seccomp:unconfined
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: "30MB"
+
+networks:
+  rinha:
+    driver: bridge
