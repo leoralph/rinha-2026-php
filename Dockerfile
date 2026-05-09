@@ -25,14 +25,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM dunglas/frankenphp:1.10-php8.4-bookworm
 
 COPY --from=rustbuild /tmp/rinha.so /usr/local/lib/php/extensions/rinha.so
-RUN echo 'extension=/usr/local/lib/php/extensions/rinha.so' \
-    > /usr/local/etc/php/conf.d/rinha.ini \
-    && echo 'opcache.enable=1' \
-    >> /usr/local/etc/php/conf.d/rinha.ini \
-    && echo 'opcache.jit=tracing' \
-    >> /usr/local/etc/php/conf.d/rinha.ini \
-    && echo 'opcache.jit_buffer_size=64M' \
-    >> /usr/local/etc/php/conf.d/rinha.ini
+RUN { \
+        echo 'extension=/usr/local/lib/php/extensions/rinha.so'; \
+        echo 'opcache.enable=1'; \
+        echo 'opcache.enable_cli=1'; \
+        echo 'opcache.jit=tracing'; \
+        echo 'opcache.jit_buffer_size=128M'; \
+        echo 'opcache.validate_timestamps=0'; \
+        echo 'opcache.max_accelerated_files=64'; \
+        echo 'opcache.memory_consumption=64'; \
+        echo 'opcache.preload_user=root'; \
+        echo 'realpath_cache_size=4096K'; \
+        echo 'realpath_cache_ttl=600'; \
+        echo 'memory_limit=128M'; \
+    } > /usr/local/etc/php/conf.d/rinha.ini
 
 COPY src/public/ /app/public/
 COPY Caddyfile /etc/caddy/Caddyfile

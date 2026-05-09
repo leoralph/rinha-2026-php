@@ -24,7 +24,8 @@ pub fn load_vectors(path: &str) -> io::Result<Vectors> {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "version/dims"));
     }
     let mmap = unsafe { Mmap::map(&file)? };
-    let _ = mmap.advise(memmap2::Advice::Random);
+    let _ = mmap.advise(memmap2::Advice::WillNeed);
+    let _ = mmap.lock();
     Ok(Vectors { mmap, count, payload_offset: 16 })
 }
 
@@ -34,7 +35,10 @@ pub fn load_labels(path: &str, count: u32) -> io::Result<Mmap> {
     if len != count as u64 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "labels size"));
     }
-    unsafe { Mmap::map(&file) }
+    let m = unsafe { Mmap::map(&file)? };
+    let _ = m.advise(memmap2::Advice::WillNeed);
+    let _ = m.lock();
+    Ok(m)
 }
 
 #[inline(always)]
