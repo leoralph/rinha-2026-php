@@ -1,6 +1,10 @@
 {
 	frankenphp {
-		worker /app/public/index.php
+		num_threads 4
+		worker {
+			file /app/public/index.php
+			num 4
+		}
 	}
 	order php_server before file_server
 	auto_https off

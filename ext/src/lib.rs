@@ -44,7 +44,28 @@ fn ensure_loaded() -> Result<&'static State, String> {
 
 #[php_function]
 pub fn rinha_warmup() -> bool {
-    ensure_loaded().is_ok()
+    let state = match ensure_loaded() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    // Toca todas as páginas dos mmaps pra forçar demand-paging cold → hot
+    // antes do /ready responder 200. Sem isso, a primeira leva da Rinha paga
+    // ~32k page faults que aparecem como 200ms+ na cauda.
+    let mut sum: u64 = 0;
+    let body = &state.vectors.mmap[state.vectors.payload_offset..];
+    let mut i = 0;
+    while i < body.len() {
+        sum = sum.wrapping_add(body[i] as u64);
+        i += 4096;
+    }
+    let labels = &state.labels[..];
+    let mut i = 0;
+    while i < labels.len() {
+        sum = sum.wrapping_add(labels[i] as u64);
+        i += 4096;
+    }
+    std::hint::black_box(sum);
+    true
 }
 
 #[php_function]
