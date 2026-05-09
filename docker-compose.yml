@@ -1,5 +1,5 @@
 x-api: &api
-  image: ghcr.io/leoralph/rinha-2026-php:v1.2.0
+  image: ghcr.io/leoralph/rinha-2026-php:v1.3.0
   networks: [rinha]
   ulimits:
     nofile: { soft: 65535, hard: 65535 }
