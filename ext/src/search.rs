@@ -1,6 +1,16 @@
 use crate::data::{read_dim, VEC_BYTES};
 use std::io::{self, Read};
 
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn prefetch_t0(p: *const u8) {
+    unsafe { std::arch::x86_64::_mm_prefetch(p as *const i8, std::arch::x86_64::_MM_HINT_T0); }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline(always)]
+fn prefetch_t0(_p: *const u8) {}
+
 #[derive(Clone, Copy)]
 pub struct Node {
     pub threshold_sq: i64,
@@ -121,8 +131,16 @@ fn search_node(nodes: &[Node], vectors: &[u8], query: &[i32; 14], heap: &mut Vec
     let n = nodes[idx];
 
     if n.right_child_idx == -1 {
+        // Prefetch primeira linha da leaf (geralmente cold no L1).
+        let leaf_base = (n.range_lo as usize) * VEC_BYTES;
+        prefetch_t0(unsafe { vectors.as_ptr().add(leaf_base) });
         for i in n.range_lo..n.range_hi {
-            let d = dist_sq(query, vectors, (i as usize) * VEC_BYTES);
+            let off = (i as usize) * VEC_BYTES;
+            // Prefetch da próxima linha enquanto processamos a atual.
+            if i + 1 < n.range_hi {
+                prefetch_t0(unsafe { vectors.as_ptr().add(off + VEC_BYTES) });
+            }
+            let d = dist_sq(query, vectors, off);
             push_heap(heap, d, i);
         }
         return;

@@ -41,18 +41,14 @@ $server->on('start', function () use ($sock) {
 
 $server->on('request', function (Swoole\Http\Request $req, Swoole\Http\Response $resp) {
     $uri = $req->server['request_uri'] ?? '';
-    $method = $req->server['request_method'] ?? '';
 
-    if ($uri === '/fraud-score' && $method === 'POST') {
-        $idx = \rinha_fraud_count($req->rawContent() ?: '{}');
-        if ($idx > 5) { $idx = 5; }
-        $resp->header('Content-Type', 'application/json', false);
-        $resp->end(FRAUD_BODIES[$idx]);
+    if ($uri === '/fraud-score') {
+        // Default Content-Type já é text/html; k6 só checa status + body.
+        $resp->end(FRAUD_BODIES[\rinha_fraud_count($req->rawContent() ?: '{}')]);
         return;
     }
 
-    if ($uri === '/ready' && $method === 'GET') {
-        $resp->status(200);
+    if ($uri === '/ready') {
         $resp->end('');
         return;
     }

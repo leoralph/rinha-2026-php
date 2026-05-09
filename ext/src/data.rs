@@ -25,6 +25,9 @@ pub fn load_vectors(path: &str) -> io::Result<Vectors> {
     }
     let mmap = unsafe { Mmap::map(&file)? };
     let _ = mmap.advise(memmap2::Advice::WillNeed);
+    // HugePages reduz ~32k entries TLB → 65 entries (pages 2MB cobrem todos
+    // os 130MB). Crítico no Mac Mini Late 2014 (Haswell, TLB pequeno).
+    let _ = mmap.advise(memmap2::Advice::HugePage);
     let _ = mmap.lock();
     Ok(Vectors { mmap, count, payload_offset: 16 })
 }
@@ -37,6 +40,7 @@ pub fn load_labels(path: &str, count: u32) -> io::Result<Mmap> {
     }
     let m = unsafe { Mmap::map(&file)? };
     let _ = m.advise(memmap2::Advice::WillNeed);
+    let _ = m.advise(memmap2::Advice::HugePage);
     let _ = m.lock();
     Ok(m)
 }
