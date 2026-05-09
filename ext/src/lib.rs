@@ -1,13 +1,16 @@
 mod data;
-mod response;
 mod search;
 mod vector;
 
 use ext_php_rs::prelude::*;
+use mimalloc::MiMalloc;
 use memmap2::Mmap;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::Path;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 const NORMALIZATION_JSON: &str = include_str!("../resources/normalization.json");
 const MCC_RISK_JSON: &str = include_str!("../resources/mcc_risk.json");
@@ -22,10 +25,7 @@ struct State {
 
 static STATE: OnceCell<State> = OnceCell::new();
 
-fn ensure_loaded() -> Result<&'static State, String> {
-    if let Some(s) = STATE.get() {
-        return Ok(s);
-    }
+fn load_state() -> Result<State, String> {
     let dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "/data".to_string());
     let dir = Path::new(&dir);
     let vectors = data::load_vectors(dir.join("vectors.i24").to_str().unwrap())
@@ -38,19 +38,11 @@ fn ensure_loaded() -> Result<&'static State, String> {
         .map_err(|e| format!("normalization: {}", e))?;
     let mcc_risk: HashMap<String, f64> = serde_json::from_str(MCC_RISK_JSON)
         .map_err(|e| format!("mcc_risk: {}", e))?;
-    let _ = STATE.set(State { vectors, labels, nodes, norm, mcc_risk });
-    Ok(STATE.get().unwrap())
+    Ok(State { vectors, labels, nodes, norm, mcc_risk })
 }
 
-#[php_function]
-pub fn rinha_warmup() -> bool {
-    let state = match ensure_loaded() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    // Toca todas as páginas dos mmaps pra forçar demand-paging cold → hot
-    // antes do /ready responder 200. Sem isso, a primeira leva da Rinha paga
-    // ~32k page faults que aparecem como 200ms+ na cauda.
+fn warmup_state(state: &State) {
+    // Toca todas as páginas dos mmaps pra forçar demand-paging.
     let mut sum: u64 = 0;
     let body = &state.vectors.mmap[state.vectors.payload_offset..];
     let mut i = 0;
@@ -65,28 +57,46 @@ pub fn rinha_warmup() -> bool {
         i += 4096;
     }
     std::hint::black_box(sum);
-    true
+}
+
+extern "C" fn module_startup(_ty: i32, _mod_num: i32) -> i32 {
+    let t0 = std::time::Instant::now();
+    let state = match load_state() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("rinha: load_state failed: {}", e);
+            return 1;
+        }
+    };
+    let t_load = t0.elapsed();
+    let t1 = std::time::Instant::now();
+    warmup_state(&state);
+    let t_warm = t1.elapsed();
+    let _ = STATE.set(state);
+    eprintln!("rinha: load {:?}, warmup {:?}", t_load, t_warm);
+    0
 }
 
 #[php_function]
-pub fn rinha_score(payload: String) -> String {
-    let state = match ensure_loaded() {
-        Ok(s) => s,
-        Err(e) => return format!(r#"{{"error":"{}"}}"#, e),
-    };
+pub fn rinha_fraud_count(payload: String) -> u32 {
+    let Some(state) = STATE.get() else { return 0; };
     let query = match vector::quantize_payload(payload.as_bytes(), &state.norm, &state.mcc_risk) {
         Ok(q) => q,
-        Err(e) => return format!(r#"{{"error":"{}"}}"#, e),
+        Err(_) => return 0,
     };
-    let payload_off = state.vectors.payload_offset;
-    let body = &state.vectors.mmap[payload_off..];
+    let body = &state.vectors.mmap[state.vectors.payload_offset..];
     let results = search::search_vptree(&state.nodes, body, &query);
     let labels = &state.labels[..];
-    let fraud_count = results.iter().filter(|r| labels[r.index as usize] == 1).count();
-    response::FRAUD_BODIES[fraud_count.min(5)].to_string()
+    let mut count: u32 = 0;
+    for r in results.iter() {
+        if labels[r.index as usize] == 1 {
+            count += 1;
+        }
+    }
+    count
 }
 
 #[php_module]
 pub fn module(module: ModuleBuilder) -> ModuleBuilder {
-    module
+    module.startup_function(module_startup)
 }

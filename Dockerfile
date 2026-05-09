@@ -1,51 +1,59 @@
-### Stage 1: build da extensão Rust contra os headers do PHP do FrankenPHP.
-FROM dunglas/frankenphp:1.10-php8.4-bookworm AS rustbuild
+# syntax=docker/dockerfile:1.7
 
+### Stage 1: build da extensão Rust contra os headers do PHP 8.3
+FROM --platform=linux/amd64 rust:1-slim AS extbuild
+
+WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config libclang-dev clang curl ca-certificates \
+        clang libclang-dev pkg-config ca-certificates curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Toolchain Rust mínimo via rustup (sem mise — compatibilidade Debian)
-ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain stable --profile minimal
+# php8.3-dev (Sury repo) pra ext-php-rs gerar bindings
+RUN curl -sSLo /usr/share/keyrings/php.gpg https://packages.sury.org/php/apt.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/php.gpg] https://packages.sury.org/php/ bookworm main" \
+        > /etc/apt/sources.list.d/php.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        php8.3 php8.3-dev php8.3-cli \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+ENV RUSTFLAGS="-C target-cpu=haswell -C target-feature=+avx2,+fma,+bmi2,+popcnt -C link-arg=-s"
+
 COPY ext/Cargo.toml ext/Cargo.lock* ./
 COPY ext/src ./src
 COPY ext/resources ./resources
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/src/target \
     cargo build --release && \
     cp target/release/librinha.so /tmp/rinha.so
 
 
-### Stage 2: runtime FrankenPHP com extensão + dados baked.
-FROM dunglas/frankenphp:1.10-php8.4-bookworm
+### Stage 2: runtime PHP 8.3 CLI + Swoole + extensão + dados baked
+FROM --platform=linux/amd64 php:8.3-cli-bookworm
 
-COPY --from=rustbuild /tmp/rinha.so /usr/local/lib/php/extensions/rinha.so
-RUN { \
-        echo 'extension=/usr/local/lib/php/extensions/rinha.so'; \
-        echo 'opcache.enable=1'; \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl-dev libcurl4-openssl-dev libc-ares-dev libbrotli-dev \
+    && pecl install --configureoptions 'enable-openssl="yes" enable-swoole-curl="no" enable-cares="no" enable-brotli="no"' swoole \
+    && docker-php-ext-enable swoole opcache \
+    && rm -rf /var/lib/apt/lists/* /tmp/pear
+
+COPY --from=extbuild /tmp/rinha.so /tmp/rinha.so
+RUN cp /tmp/rinha.so "$(php-config --extension-dir)/rinha.so" \
+    && rm /tmp/rinha.so \
+    && { \
+        echo 'extension=rinha.so'; \
         echo 'opcache.enable_cli=1'; \
         echo 'opcache.jit=tracing'; \
-        echo 'opcache.jit_buffer_size=128M'; \
+        echo 'opcache.jit_buffer_size=64M'; \
         echo 'opcache.validate_timestamps=0'; \
         echo 'opcache.max_accelerated_files=64'; \
         echo 'opcache.memory_consumption=64'; \
-        echo 'opcache.preload_user=root'; \
-        echo 'realpath_cache_size=4096K'; \
-        echo 'realpath_cache_ttl=600'; \
         echo 'memory_limit=128M'; \
-    } > /usr/local/etc/php/conf.d/rinha.ini
+    } > /usr/local/etc/php/conf.d/zz-rinha.ini
 
-COPY src/public/ /app/public/
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY src/server.php /app/server.php
 COPY data/ /data/
 
-ENV DATA_DIR=/data \
-    SERVER_NAME=:9999 \
-    FRANKENPHP_CONFIG="worker /app/public/index.php"
+ENV DATA_DIR=/data
+WORKDIR /app
 
-EXPOSE 9999
+CMD ["php", "/app/server.php"]
