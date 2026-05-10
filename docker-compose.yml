@@ -1,5 +1,5 @@
 x-api: &api
-  image: ghcr.io/leoralph/rinha-2026-php:v1.5.0
+  image: ghcr.io/leoralph/rinha-2026-php:v1.6.0
   environment:
     - DATA_DIR=/data
   networks: [rinha]
@@ -12,7 +12,7 @@ x-api: &api
   deploy:
     resources:
       limits:
-        cpus: "0.45"
+        cpus: "0.40"
         memory: "165M"
 
 services:
@@ -45,7 +45,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.20"
           memory: "20M"
 
 networks:
