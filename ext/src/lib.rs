@@ -28,7 +28,7 @@ static STATE: OnceCell<State> = OnceCell::new();
 fn load_state() -> Result<State, String> {
     let dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "/data".to_string());
     let dir = Path::new(&dir);
-    let vectors = data::load_vectors(dir.join("vectors.i24").to_str().unwrap())
+    let vectors = data::load_vectors(dir.join("vectors.i16").to_str().unwrap())
         .map_err(|e| format!("vectors: {}", e))?;
     let labels = data::load_labels(dir.join("labels.u8").to_str().unwrap(), vectors.count)
         .map_err(|e| format!("labels: {}", e))?;
@@ -85,7 +85,7 @@ pub fn rinha_fraud_count(payload: String) -> u32 {
         Err(_) => return 0,
     };
     let body = &state.vectors.mmap[state.vectors.payload_offset..];
-    let results = search::search_vptree(&state.nodes, body, &query);
+    let results = search::search_vptree(&state.nodes, body, query.as_ptr());
     let labels = &state.labels[..];
     let mut count: u32 = 0;
     for r in results.iter() {

@@ -11,13 +11,17 @@ pub struct Normalization {
     pub max_merchant_avg_amount: f64,
 }
 
-pub const QUANT_SCALE: i64 = (1 << 23) - 1;
+// Escala 10000 = match exato dos 4 decimais (round4) que o gerador C aplica
+// nos vetores de referência. Zero perda de informação na quantização.
+pub const QUANT_SCALE: f64 = 10000.0;
 
+// Query padded a 16 i16 (14 dims + 2 zeros) pra alinhar com layout dos vetores
+// de referência e habilitar AVX2 _mm256_loadu_si256.
 pub fn quantize_payload(
     body: &[u8],
     norm: &Normalization,
     mcc_risk: &std::collections::HashMap<String, f64>,
-) -> Result<[i32; 14], &'static str> {
+) -> Result<[i16; 16], &'static str> {
     let mut p = Parser::new(body);
     let pay = p.parse()?;
 
@@ -54,7 +58,7 @@ pub fn quantize_payload(
     f[12] = mcc_risk.get(mcc).copied().unwrap_or(0.5);
     f[13] = clamp(pay.merchant_avg / norm.max_merchant_avg_amount);
 
-    let mut q = [0i32; 14];
+    let mut q = [0i16; 16]; // 14 dims + 2 zero padding
     for i in 0..14 {
         q[i] = quantize(round4(f[i]));
     }
@@ -70,12 +74,12 @@ fn clamp(v: f64) -> f64 {
 }
 
 #[inline(always)]
-fn quantize(v: f64) -> i32 {
+fn quantize(v: f64) -> i16 {
     let v = if v > 1.0 { 1.0 } else if v < -1.0 { -1.0 } else { v };
     if v >= 0.0 {
-        (v * QUANT_SCALE as f64 + 0.5) as i32
+        (v * QUANT_SCALE + 0.5) as i16
     } else {
-        (v * QUANT_SCALE as f64 - 0.5) as i32
+        (v * QUANT_SCALE - 0.5) as i16
     }
 }
 

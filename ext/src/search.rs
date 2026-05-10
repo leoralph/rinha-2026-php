@@ -1,15 +1,5 @@
-use crate::data::{read_dim, VEC_BYTES};
+use crate::data::{vec_ptr, VEC_BYTES};
 use std::io::{self, Read};
-
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-fn prefetch_t0(p: *const u8) {
-    unsafe { std::arch::x86_64::_mm_prefetch(p as *const i8, std::arch::x86_64::_MM_HINT_T0); }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[inline(always)]
-fn prefetch_t0(_p: *const u8) {}
 
 #[derive(Clone, Copy)]
 pub struct Node {
@@ -54,28 +44,50 @@ pub fn load_vptree(path: &str, expected_count: u32) -> io::Result<(Vec<Node>, u3
     Ok((nodes, bucket))
 }
 
+// Distância L2² entre query (16 i16 padded com 2 zeros) e vetor (16 i16 padded).
+// AVX2: 1 load + sub_epi16 + madd_epi16 + reduce em ~5 SIMD instr ≈ 7-10 cycles.
+// Resultado em i64 pra evitar overflow (max 14×20000² = 5.6B > i32).
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
-fn dist_sq(query: &[i32; 14], vectors: &[u8], base: usize) -> i64 {
-    let d0 = read_dim(vectors, base) - query[0];
-    let d1 = read_dim(vectors, base + 3) - query[1];
-    let d2 = read_dim(vectors, base + 6) - query[2];
-    let d3 = read_dim(vectors, base + 9) - query[3];
-    let d4 = read_dim(vectors, base + 12) - query[4];
-    let d5 = read_dim(vectors, base + 15) - query[5];
-    let d6 = read_dim(vectors, base + 18) - query[6];
-    let d7 = read_dim(vectors, base + 21) - query[7];
-    let d8 = read_dim(vectors, base + 24) - query[8];
-    let d9 = read_dim(vectors, base + 27) - query[9];
-    let d10 = read_dim(vectors, base + 30) - query[10];
-    let d11 = read_dim(vectors, base + 33) - query[11];
-    let d12 = read_dim(vectors, base + 36) - query[12];
-    let d13 = read_dim(vectors, base + 39) - query[13];
-    (d0 as i64).pow(2) + (d1 as i64).pow(2) + (d2 as i64).pow(2)
-        + (d3 as i64).pow(2) + (d4 as i64).pow(2) + (d5 as i64).pow(2)
-        + (d6 as i64).pow(2) + (d7 as i64).pow(2) + (d8 as i64).pow(2)
-        + (d9 as i64).pow(2) + (d10 as i64).pow(2) + (d11 as i64).pow(2)
-        + (d12 as i64).pow(2) + (d13 as i64).pow(2)
+pub unsafe fn dist_sq(query: *const i16, vector: *const i16) -> i64 {
+    use std::arch::x86_64::*;
+    let q = _mm256_loadu_si256(query as *const __m256i);
+    let v = _mm256_loadu_si256(vector as *const __m256i);
+    let diff = _mm256_sub_epi16(v, q);
+    // _mm256_madd_epi16: pares (a*c + b*d) → 8 i32. Lanes onde diff=0 contribuem 0.
+    let sq = _mm256_madd_epi16(diff, diff);
+    // Sum 8 i32 com extensão pra i64 (sum max 5.6B ultrapassa i32).
+    let zero = _mm256_setzero_si256();
+    let lo = _mm256_unpacklo_epi32(sq, zero);   // 4 i64
+    let hi = _mm256_unpackhi_epi32(sq, zero);   // 4 i64
+    let total = _mm256_add_epi64(lo, hi);       // 4 i64
+    let lo128 = _mm256_castsi256_si128(total);
+    let hi128 = _mm256_extracti128_si256(total, 1);
+    let s2 = _mm_add_epi64(lo128, hi128);       // 2 i64
+    let r = _mm_add_epi64(s2, _mm_unpackhi_epi64(s2, s2)); // 1 i64
+    _mm_cvtsi128_si64(r) as i64
 }
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline(always)]
+pub unsafe fn dist_sq(query: *const i16, vector: *const i16) -> i64 {
+    let mut s: i64 = 0;
+    for i in 0..14 {
+        let d = (*vector.add(i)) as i64 - (*query.add(i)) as i64;
+        s += d * d;
+    }
+    s
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn prefetch_t0(p: *const u8) {
+    unsafe { std::arch::x86_64::_mm_prefetch(p as *const i8, std::arch::x86_64::_MM_HINT_T0); }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline(always)]
+fn prefetch_t0(_p: *const u8) {}
 
 pub const KNN: usize = 5;
 
@@ -92,9 +104,7 @@ fn push_heap(heap: &mut Vec<Result>, d: i64, idx: u32) {
         let mut i = heap.len() - 1;
         while i > 0 {
             let parent = (i - 1) / 2;
-            if heap[parent].distance >= heap[i].distance {
-                break;
-            }
+            if heap[parent].distance >= heap[i].distance { break; }
             heap.swap(parent, i);
             i = parent;
         }
@@ -106,49 +116,43 @@ fn push_heap(heap: &mut Vec<Result>, d: i64, idx: u32) {
             let l = 2 * i + 1;
             let r = 2 * i + 2;
             let mut largest = i;
-            if l < n && heap[l].distance > heap[largest].distance {
-                largest = l;
-            }
-            if r < n && heap[r].distance > heap[largest].distance {
-                largest = r;
-            }
-            if largest == i {
-                break;
-            }
+            if l < n && heap[l].distance > heap[largest].distance { largest = l; }
+            if r < n && heap[r].distance > heap[largest].distance { largest = r; }
+            if largest == i { break; }
             heap.swap(i, largest);
             i = largest;
         }
     }
 }
 
-pub fn search_vptree(nodes: &[Node], vectors: &[u8], query: &[i32; 14]) -> Vec<Result> {
+pub fn search_vptree(nodes: &[Node], vectors: &[u8], query: *const i16) -> Vec<Result> {
     let mut heap: Vec<Result> = Vec::with_capacity(KNN);
     search_node(nodes, vectors, query, &mut heap, 0);
     heap
 }
 
-fn search_node(nodes: &[Node], vectors: &[u8], query: &[i32; 14], heap: &mut Vec<Result>, idx: usize) {
+fn search_node(nodes: &[Node], vectors: &[u8], query: *const i16, heap: &mut Vec<Result>, idx: usize) {
     let n = nodes[idx];
 
     if n.right_child_idx == -1 {
-        // Prefetch primeira linha da leaf (geralmente cold no L1).
-        let leaf_base = (n.range_lo as usize) * VEC_BYTES;
-        prefetch_t0(unsafe { vectors.as_ptr().add(leaf_base) });
-        for i in n.range_lo..n.range_hi {
-            let off = (i as usize) * VEC_BYTES;
-            // Prefetch da próxima linha enquanto processamos a atual.
-            if i + 1 < n.range_hi {
-                prefetch_t0(unsafe { vectors.as_ptr().add(off + VEC_BYTES) });
+        let lo = n.range_lo as usize;
+        let hi = n.range_hi as usize;
+        // Prefetch primeira linha da leaf
+        prefetch_t0(unsafe { vectors.as_ptr().add(lo * VEC_BYTES) });
+        for i in lo..hi {
+            // Prefetch próxima enquanto processamos atual
+            if i + 1 < hi {
+                prefetch_t0(unsafe { vectors.as_ptr().add((i + 1) * VEC_BYTES) });
             }
-            let d = dist_sq(query, vectors, off);
-            push_heap(heap, d, i);
+            let d = unsafe { dist_sq(query, vec_ptr(vectors, i)) };
+            push_heap(heap, d, i as u32);
         }
         return;
     }
 
-    let pivot_idx = n.range_lo;
-    let d = dist_sq(query, vectors, (pivot_idx as usize) * VEC_BYTES);
-    push_heap(heap, d, pivot_idx);
+    let pivot_idx = n.range_lo as usize;
+    let d = unsafe { dist_sq(query, vec_ptr(vectors, pivot_idx)) };
+    push_heap(heap, d, pivot_idx as u32);
 
     let left_idx = idx + 1;
     let right_idx = n.right_child_idx as usize;

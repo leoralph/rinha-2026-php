@@ -2,7 +2,10 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, Read};
 
-pub const VEC_BYTES: usize = 42;
+// Cada vetor: 14 dims i16 + 2 zeros padding = 16 i16 = 32 bytes alinhados
+// (permite AVX2 _mm256_loadu_si256 sem mascarar lanes).
+pub const VEC_DIMS_PADDED: usize = 16;
+pub const VEC_BYTES: usize = VEC_DIMS_PADDED * 2;
 
 pub struct Vectors {
     pub mmap: Mmap,
@@ -14,7 +17,7 @@ pub fn load_vectors(path: &str) -> io::Result<Vectors> {
     let file = File::open(path)?;
     let mut header = [0u8; 16];
     file.try_clone()?.read_exact(&mut header)?;
-    if &header[0..4] != b"VEC3" {
+    if &header[0..4] != b"VEC4" {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "magic invalido"));
     }
     let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
@@ -41,7 +44,7 @@ pub fn load_labels(path: &str, count: u32) -> io::Result<Mmap> {
     Ok(m)
 }
 
-#[inline(always)]
-pub fn read_dim(vectors: &[u8], off: usize) -> i32 {
-    (((vectors[off] as u32) << 8) | ((vectors[off + 1] as u32) << 16) | ((vectors[off + 2] as u32) << 24)) as i32 >> 8
+#[inline]
+pub fn vec_ptr(payload: &[u8], idx: usize) -> *const i16 {
+    unsafe { payload.as_ptr().add(idx * VEC_BYTES) as *const i16 }
 }
