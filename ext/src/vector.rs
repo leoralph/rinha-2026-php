@@ -11,12 +11,10 @@ pub struct Normalization {
     pub max_merchant_avg_amount: f64,
 }
 
-// Escala 10000 = match exato dos 4 decimais (round4) que o gerador C aplica
-// nos vetores de referência. Zero perda de informação na quantização.
+// Escala 10000 = match exato do round4 que o gerador C aplica nos vetores de
+// referência. Sem isso, ~1 mismatch por 60K consultas vira false negative.
 pub const QUANT_SCALE: f64 = 10000.0;
 
-// Query padded a 16 i16 (14 dims + 2 zeros) pra alinhar com layout dos vetores
-// de referência e habilitar AVX2 _mm256_loadu_si256.
 pub fn quantize_payload(
     body: &[u8],
     norm: &Normalization,
@@ -58,7 +56,7 @@ pub fn quantize_payload(
     f[12] = mcc_risk.get(mcc).copied().unwrap_or(0.5);
     f[13] = clamp(pay.merchant_avg / norm.max_merchant_avg_amount);
 
-    let mut q = [0i16; 16]; // 14 dims + 2 zero padding
+    let mut q = [0i16; 16];
     for i in 0..14 {
         q[i] = quantize(round4(f[i]));
     }
@@ -83,9 +81,8 @@ fn quantize(v: f64) -> i16 {
     }
 }
 
-// Custom JSON parser pro schema fixo do POST /fraud-score (ordem das chaves
-// definida em data-generator/main.c). Evita o overhead de serde_json no path
-// quente — economia direta de CPU sob throttling cgroup.
+// Schema fixo do POST /fraud-score (ordem das chaves: data-generator/main.c).
+// Evitar serde_json no path quente.
 struct Parser<'a> { buf: &'a [u8], pos: usize }
 
 struct Parsed<'a> {
@@ -115,7 +112,6 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn skip_string(&mut self) {
-        // assume estamos numa quote de abertura
         self.pos += 1;
         while self.pos < self.buf.len() && self.buf[self.pos] != b'"' { self.pos += 1; }
         self.pos += 1;
@@ -128,25 +124,29 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn parse_string(&mut self) -> &'a [u8] {
-        self.skip_to(b'"'); self.pos += 1;
+        self.skip_to(b'"');
+        if self.pos >= self.buf.len() { return &[]; }
+        self.pos += 1;
         let start = self.pos;
         while self.pos < self.buf.len() && self.buf[self.pos] != b'"' { self.pos += 1; }
-        let s = &self.buf[start..self.pos];
-        self.pos += 1;
-        s
+        let end = self.pos;
+        if self.pos < self.buf.len() { self.pos += 1; }
+        if start > end { &[] } else { &self.buf[start..end] }
     }
 
     #[inline]
     fn parse_f64(&mut self) -> f64 {
         self.after_colon();
-        let start = self.pos;
+        let start = self.pos.min(self.buf.len());
         while self.pos < self.buf.len() {
             let c = self.buf[self.pos];
             if (c >= b'0' && c <= b'9') || c == b'.' || c == b'-' || c == b'+' || c == b'e' || c == b'E' {
                 self.pos += 1;
             } else { break; }
         }
-        let s = unsafe { std::str::from_utf8_unchecked(&self.buf[start..self.pos]) };
+        let end = self.pos;
+        if start >= end { return 0.0; }
+        let s = unsafe { std::str::from_utf8_unchecked(&self.buf[start..end]) };
         s.parse::<f64>().unwrap_or(0.0)
     }
 
@@ -167,6 +167,7 @@ impl<'a> Parser<'a> {
     #[inline]
     fn parse_bool(&mut self) -> bool {
         self.after_colon();
+        if self.pos >= self.buf.len() { return false; }
         let r = self.buf[self.pos] == b't';
         while self.pos < self.buf.len() {
             let c = self.buf[self.pos];
@@ -181,67 +182,60 @@ impl<'a> Parser<'a> {
         self.parse_string()
     }
 
+    // Esquema esperado (ordem fixa do data-generator/main.c):
+    //   id, transaction{amount,installments,requested_at},
+    //   customer{avg_amount,tx_count_24h,known_merchants[]},
+    //   merchant{id,mcc,avg_amount},
+    //   terminal{is_online,card_present,km_from_home},
+    //   last_transaction (null | {timestamp,km_from_current})
     fn parse(&mut self) -> Result<Parsed<'a>, &'static str> {
-        // Schema fixo (ordem do gerador C):
-        //   id, transaction{amount,installments,requested_at},
-        //   customer{avg_amount,tx_count_24h,known_merchants[]},
-        //   merchant{id,mcc,avg_amount},
-        //   terminal{is_online,card_present,km_from_home},
-        //   last_transaction (null | {timestamp,km_from_current})
+        self.skip_to(b'"'); self.skip_string();
+        self.skip_to(b'"'); self.skip_string();
 
-        // "id":"tx-..."
-        self.skip_to(b'"'); self.skip_string();             // key "id"
-        self.skip_to(b'"'); self.skip_string();             // value
-
-        // "transaction":{...}
-        self.skip_to(b'"'); self.skip_string();             // key "transaction"
-        self.skip_to(b'"'); self.skip_string();             // key "amount"
+        self.skip_to(b'"'); self.skip_string();
+        self.skip_to(b'"'); self.skip_string();
         let amount = self.parse_f64();
-        self.skip_to(b'"'); self.skip_string();             // "installments"
+        self.skip_to(b'"'); self.skip_string();
         let installments = self.parse_u32();
-        self.skip_to(b'"'); self.skip_string();             // "requested_at"
+        self.skip_to(b'"'); self.skip_string();
         let requested_at = self.parse_string_after_colon();
 
-        // "customer":{...}
-        self.skip_to(b'"'); self.skip_string();             // "customer"
-        self.skip_to(b'"'); self.skip_string();             // "avg_amount"
+        self.skip_to(b'"'); self.skip_string();
+        self.skip_to(b'"'); self.skip_string();
         let avg_amount = self.parse_f64();
-        self.skip_to(b'"'); self.skip_string();             // "tx_count_24h"
+        self.skip_to(b'"'); self.skip_string();
         let tx_count_24h = self.parse_u32();
-        self.skip_to(b'"'); self.skip_string();             // "known_merchants"
+        self.skip_to(b'"'); self.skip_string();
         self.skip_to(b'['); self.pos += 1;
         let known_lo = self.pos;
         while self.pos < self.buf.len() && self.buf[self.pos] != b']' { self.pos += 1; }
         let known_hi = self.pos;
         self.pos += 1;
 
-        // "merchant":{...}
-        self.skip_to(b'"'); self.skip_string();             // "merchant"
-        self.skip_to(b'"'); self.skip_string();             // "id"
+        self.skip_to(b'"'); self.skip_string();
+        self.skip_to(b'"'); self.skip_string();
         let merchant_id = self.parse_string_after_colon();
-        self.skip_to(b'"'); self.skip_string();             // "mcc"
+        self.skip_to(b'"'); self.skip_string();
         let mcc = self.parse_string_after_colon();
-        self.skip_to(b'"'); self.skip_string();             // "avg_amount"
+        self.skip_to(b'"'); self.skip_string();
         let merchant_avg = self.parse_f64();
 
-        // "terminal":{...}
-        self.skip_to(b'"'); self.skip_string();             // "terminal"
-        self.skip_to(b'"'); self.skip_string();             // "is_online"
+        self.skip_to(b'"'); self.skip_string();
+        self.skip_to(b'"'); self.skip_string();
         let is_online = self.parse_bool();
-        self.skip_to(b'"'); self.skip_string();             // "card_present"
+        self.skip_to(b'"'); self.skip_string();
         let card_present = self.parse_bool();
-        self.skip_to(b'"'); self.skip_string();             // "km_from_home"
+        self.skip_to(b'"'); self.skip_string();
         let km_from_home = self.parse_f64();
 
-        // "last_transaction": null | {...}
-        self.skip_to(b'"'); self.skip_string();             // "last_transaction"
+        self.skip_to(b'"'); self.skip_string();
         self.after_colon();
         let last_tx = if self.pos < self.buf.len() && self.buf[self.pos] == b'n' {
             None
         } else {
-            self.skip_to(b'"'); self.skip_string();         // "timestamp"
+            self.skip_to(b'"'); self.skip_string();
             let ts = self.parse_string_after_colon();
-            self.skip_to(b'"'); self.skip_string();         // "km_from_current"
+            self.skip_to(b'"'); self.skip_string();
             let km = self.parse_f64();
             Some((ts, km))
         };
@@ -255,8 +249,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-// Verifica se merchant_id aparece exatamente como elemento dentro do array
-// `[..."MERC-x","MERC-y"...]` cobrindo bytes [lo, hi). Sem alocação.
 fn known_contains(buf: &[u8], lo: usize, hi: usize, merchant_id: &[u8]) -> bool {
     let needle_len = merchant_id.len() + 2;
     let slice = &buf[lo..hi];

@@ -1,12 +1,12 @@
 [package]
-name = "rinha"
+name = "rinha-lb"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
-[lib]
-name = "rinha"
-crate-type = ["cdylib"]
+[[bin]]
+name = "rinha-lb"
+path = "src/main.rs"
 
 [profile.release]
 opt-level = 3
@@ -14,12 +14,11 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+debug = 0
 overflow-checks = false
+incremental = false
 
 [dependencies]
-ext-php-rs = "0.13"
-once_cell = "1"
-memmap2 = "0.9"
 mimalloc = { version = "0.1", default-features = false }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "macros"] }
+socket2 = "0.5"

@@ -29,12 +29,16 @@ services:
       - DATA_DIR=/data
       - SOCK=/run/sock/api2.sock
 
-  haproxy:
-    image: haproxy:2.9-alpine
+  lb:
+    image: rinha-2026-php-lb:latest
+    build:
+      context: ./lb
     restart: always
     depends_on: [api1, api2]
+    environment:
+      - PORT=9999
+      - UPSTREAMS=/run/sock/api1.sock,/run/sock/api2.sock
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - sock:/run/sock
     ports:
       - "9999:9999"

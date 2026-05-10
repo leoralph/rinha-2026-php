@@ -2,8 +2,7 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, Read};
 
-// Cada vetor: 14 dims i16 + 2 zeros padding = 16 i16 = 32 bytes alinhados
-// (permite AVX2 _mm256_loadu_si256 sem mascarar lanes).
+// 14 dims úteis + 2 zeros = 16 i16 = 32 bytes (1 _mm256_loadu_si256).
 pub const VEC_DIMS_PADDED: usize = 16;
 pub const VEC_BYTES: usize = VEC_DIMS_PADDED * 2;
 

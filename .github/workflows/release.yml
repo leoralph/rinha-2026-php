@@ -52,7 +52,7 @@ jobs:
           TAG=$(git describe --tags --always --abbrev=0)
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Build and push image
+      - name: Build and push api image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,5 +62,18 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/rinha-2026-php:${{ steps.get_tag.outputs.tag }}
             ghcr.io/${{ github.repository_owner }}/rinha-2026-php:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push lb image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./lb
+          push: true
+          file: ./lb/Dockerfile
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/rinha-2026-php-lb:${{ steps.get_tag.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/rinha-2026-php-lb:latest
+          cache-from: type=gha,scope=lb
+          cache-to: type=gha,mode=max,scope=lb

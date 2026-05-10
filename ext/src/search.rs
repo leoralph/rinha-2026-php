@@ -44,9 +44,8 @@ pub fn load_vptree(path: &str, expected_count: u32) -> io::Result<(Vec<Node>, u3
     Ok((nodes, bucket))
 }
 
-// Distância L2² entre query (16 i16 padded com 2 zeros) e vetor (16 i16 padded).
-// AVX2: 1 load + sub_epi16 + madd_epi16 + reduce em ~5 SIMD instr ≈ 7-10 cycles.
-// Resultado em i64 pra evitar overflow (max 14×20000² = 5.6B > i32).
+// L2² em i64 (max 14×20000² = 5.6B ultrapassa i32). Vetores padded a 16 i16
+// pra um único _mm256_loadu_si256.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn dist_sq(query: *const i16, vector: *const i16) -> i64 {
@@ -54,17 +53,15 @@ pub unsafe fn dist_sq(query: *const i16, vector: *const i16) -> i64 {
     let q = _mm256_loadu_si256(query as *const __m256i);
     let v = _mm256_loadu_si256(vector as *const __m256i);
     let diff = _mm256_sub_epi16(v, q);
-    // _mm256_madd_epi16: pares (a*c + b*d) → 8 i32. Lanes onde diff=0 contribuem 0.
     let sq = _mm256_madd_epi16(diff, diff);
-    // Sum 8 i32 com extensão pra i64 (sum max 5.6B ultrapassa i32).
     let zero = _mm256_setzero_si256();
-    let lo = _mm256_unpacklo_epi32(sq, zero);   // 4 i64
-    let hi = _mm256_unpackhi_epi32(sq, zero);   // 4 i64
-    let total = _mm256_add_epi64(lo, hi);       // 4 i64
+    let lo = _mm256_unpacklo_epi32(sq, zero);
+    let hi = _mm256_unpackhi_epi32(sq, zero);
+    let total = _mm256_add_epi64(lo, hi);
     let lo128 = _mm256_castsi256_si128(total);
     let hi128 = _mm256_extracti128_si256(total, 1);
-    let s2 = _mm_add_epi64(lo128, hi128);       // 2 i64
-    let r = _mm_add_epi64(s2, _mm_unpackhi_epi64(s2, s2)); // 1 i64
+    let s2 = _mm_add_epi64(lo128, hi128);
+    let r = _mm_add_epi64(s2, _mm_unpackhi_epi64(s2, s2));
     _mm_cvtsi128_si64(r) as i64
 }
 
@@ -131,7 +128,6 @@ pub fn search_vptree(nodes: &[Node], vectors: &[u8], query: *const i16) -> Vec<R
     heap
 }
 
-// Variante que escreve em heap externo (pré-alocado), zero alloc por request.
 pub fn search_into(nodes: &[Node], vectors: &[u8], query: *const i16, heap: &mut Vec<Result>) {
     search_node(nodes, vectors, query, heap, 0);
 }
@@ -142,10 +138,8 @@ fn search_node(nodes: &[Node], vectors: &[u8], query: *const i16, heap: &mut Vec
     if n.right_child_idx == -1 {
         let lo = n.range_lo as usize;
         let hi = n.range_hi as usize;
-        // Prefetch primeira linha da leaf
         prefetch_t0(unsafe { vectors.as_ptr().add(lo * VEC_BYTES) });
         for i in lo..hi {
-            // Prefetch próxima enquanto processamos atual
             if i + 1 < hi {
                 prefetch_t0(unsafe { vectors.as_ptr().add((i + 1) * VEC_BYTES) });
             }

@@ -1,4 +1,7 @@
 ext/target/
+ext/Cargo.lock
+lb/target/
+lb/Cargo.lock
 .vscode/
 .idea/
 .DS_Store

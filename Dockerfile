@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1.7
 
-### Stage 1: build da extensão Rust contra os headers do PHP 8.3
 FROM --platform=linux/amd64 rust:1-slim AS extbuild
 
 WORKDIR /src
@@ -8,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         clang libclang-dev pkg-config ca-certificates curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# php8.3-dev (Sury repo) pra ext-php-rs gerar bindings
+# php8.3-dev (Sury) pra ext-php-rs gerar os bindings.
 RUN curl -sSLo /usr/share/keyrings/php.gpg https://packages.sury.org/php/apt.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/php.gpg] https://packages.sury.org/php/ bookworm main" \
         > /etc/apt/sources.list.d/php.list \
@@ -27,7 +26,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp target/release/librinha.so /tmp/rinha.so
 
 
-### Stage 2: runtime PHP 8.3 CLI + Swoole + extensão + dados baked
 FROM --platform=linux/amd64 php:8.3-cli-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
