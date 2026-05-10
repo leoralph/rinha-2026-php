@@ -131,6 +131,11 @@ pub fn search_vptree(nodes: &[Node], vectors: &[u8], query: *const i16) -> Vec<R
     heap
 }
 
+// Variante que escreve em heap externo (pré-alocado), zero alloc por request.
+pub fn search_into(nodes: &[Node], vectors: &[u8], query: *const i16, heap: &mut Vec<Result>) {
+    search_node(nodes, vectors, query, heap, 0);
+}
+
 fn search_node(nodes: &[Node], vectors: &[u8], query: *const i16, heap: &mut Vec<Result>, idx: usize) {
     let n = nodes[idx];
 
