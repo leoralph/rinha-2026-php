@@ -1,5 +1,5 @@
 x-api: &api
-  image: ghcr.io/leoralph/rinha-2026-php:v1.7.0
+  image: ghcr.io/leoralph/rinha-2026-php:v1.8.0
   environment:
     - DATA_DIR=/data
   networks: [rinha]
