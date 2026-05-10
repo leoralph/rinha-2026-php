@@ -2,6 +2,6 @@
     "participants": ["Leonardo Ralph"],
     "social": ["https://github.com/leoralph"],
     "source-code-repo": "https://github.com/leoralph/rinha-2026-php",
-    "stack": ["php", "rust", "haproxy"],
+    "stack": ["php", "rust"],
     "open_to_work": false
 }

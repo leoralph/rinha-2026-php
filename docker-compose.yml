@@ -1,5 +1,5 @@
 x-api: &api
-  image: ghcr.io/leoralph/rinha-2026-php:v1.9.0
+  image: ghcr.io/leoralph/rinha-2026-php:v1.10.0
   environment:
     - DATA_DIR=/data
   networks: [rinha]
@@ -28,12 +28,14 @@ services:
       - DATA_DIR=/data
       - SOCK=/run/sock/api2.sock
 
-  haproxy:
-    image: haproxy:2.9-alpine
+  lb:
+    image: ghcr.io/leoralph/rinha-2026-php-lb:v1.10.0
     restart: always
     depends_on: [api1, api2]
+    environment:
+      - PORT=9999
+      - UPSTREAMS=/run/sock/api1.sock,/run/sock/api2.sock
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - sock:/run/sock
     ports:
       - "9999:9999"
