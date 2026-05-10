@@ -42,7 +42,7 @@ fn load_state() -> Result<State, String> {
 }
 
 fn warmup_state(state: &State) {
-    // Toca todas as páginas dos mmaps pra forçar demand-paging.
+    // 1) Toca todas as páginas dos mmaps pra forçar demand-paging.
     let mut sum: u64 = 0;
     let body = &state.vectors.mmap[state.vectors.payload_offset..];
     let mut i = 0;
@@ -57,6 +57,18 @@ fn warmup_state(state: &State) {
         i += 4096;
     }
     std::hint::black_box(sum);
+
+    // 2) Roda 500 queries sintéticas pra aquecer branch predictor e cache da
+    // árvore (paths internos do VP-Tree, especialmente). Pseudo-random LCG.
+    let mut state_lcg: u32 = 0x12345678;
+    let mut q = [0i16; 16];
+    for _ in 0..500 {
+        for slot in q.iter_mut().take(14) {
+            state_lcg = state_lcg.wrapping_mul(1664525).wrapping_add(1013904223);
+            *slot = ((state_lcg >> 16) as i16).rem_euclid(10001);
+        }
+        let _ = search::search_vptree(&state.nodes, body, q.as_ptr());
+    }
 }
 
 extern "C" fn module_startup(_ty: i32, _mod_num: i32) -> i32 {

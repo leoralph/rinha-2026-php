@@ -41,16 +41,25 @@ RUN cp /tmp/rinha.so "$(php-config --extension-dir)/rinha.so" \
     && rm /tmp/rinha.so \
     && { \
         echo 'extension=rinha.so'; \
+        echo 'expose_php=Off'; \
+        echo 'output_buffering=Off'; \
+        echo 'zend.assertions=-1'; \
         echo 'opcache.enable_cli=1'; \
         echo 'opcache.jit=tracing'; \
         echo 'opcache.jit_buffer_size=64M'; \
         echo 'opcache.validate_timestamps=0'; \
         echo 'opcache.max_accelerated_files=64'; \
         echo 'opcache.memory_consumption=64'; \
+        echo 'opcache.huge_code_pages=1'; \
+        echo 'opcache.fast_shutdown=1'; \
+        echo 'opcache.preload=/app/preload.php'; \
+        echo 'opcache.preload_user=root'; \
+        echo 'realpath_cache_size=4096K'; \
+        echo 'realpath_cache_ttl=999999'; \
         echo 'memory_limit=128M'; \
     } > /usr/local/etc/php/conf.d/zz-rinha.ini
 
-COPY src/server.php /app/server.php
+COPY src/server.php src/preload.php /app/
 COPY data/ /data/
 
 ENV DATA_DIR=/data
